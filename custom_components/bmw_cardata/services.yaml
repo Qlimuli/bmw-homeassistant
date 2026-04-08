@@ -1,0 +1,69 @@
+refresh_tokens:
+  name: Refresh Tokens
+  description: Refresh the BMW CarData authentication tokens.
+
+fetch_telematic_data:
+  name: Fetch Telematic Data
+  description: Fetch telematic data for a specific vehicle.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle Identification Number
+      required: true
+      example: "WBAXXXXXXXXXXXXXXX"
+      selector:
+        text:
+    container_id:
+      name: Container ID
+      description: Telematic data container ID
+      required: true
+      example: "1234567890123"
+      selector:
+        text:
+
+fetch_charging_history:
+  name: Fetch Charging History
+  description: Fetch charging history for a vehicle.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle Identification Number
+      required: true
+      selector:
+        text:
+    from_date:
+      name: From Date
+      description: Start date (ISO 8601 format)
+      required: false
+      example: "2026-01-01T00:00:00Z"
+      selector:
+        text:
+    to_date:
+      name: To Date
+      description: End date (ISO 8601 format)
+      required: false
+      example: "2026-12-31T23:59:59Z"
+      selector:
+        text:
+
+fetch_tyre_diagnosis:
+  name: Fetch Tyre Diagnosis
+  description: Fetch tyre diagnosis data for a vehicle.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle Identification Number
+      required: true
+      selector:
+        text:
+
+fetch_vehicle_image:
+  name: Fetch Vehicle Image
+  description: Fetch vehicle image.
+  fields:
+    vin:
+      name: VIN
+      description: Vehicle Identification Number
+      required: true
+      selector:
+        text:

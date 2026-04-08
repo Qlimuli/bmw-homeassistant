@@ -1,0 +1,179 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BMW CarData Einrichtung",
+        "description": "Geben Sie Ihre BMW CarData Client-ID ein. Sie können diese im BMW Portal unter 'BMW CarData' erstellen.\n\nPortal: {bmw_portal}",
+        "data": {
+          "client_id": "Client-ID"
+        },
+        "data_description": {
+          "client_id": "Ihre BMW CarData Client-ID aus dem BMW Portal"
+        }
+      },
+      "authorize": {
+        "title": "Gerät autorisieren",
+        "description": "Bitte autorisieren Sie dieses Gerät, indem Sie den folgenden Link besuchen und den Code eingeben.\n\n**Verifizierungs-URL:** {verification_url}\n\n**Code:** {user_code}\n\n**Hinweis:** Dieser Code läuft in {expires_minutes} Minuten ab.\n\nKlicken Sie ERST auf Absenden, nachdem die BMW-Seite die erfolgreiche Autorisierung bestätigt hat."
+      },
+      "reauth_confirm": {
+        "title": "BMW CarData erneut authentifizieren",
+        "description": "Ihre BMW CarData-Sitzung ist abgelaufen. Klicken Sie auf Absenden, um den Authentifizierungsprozess zu starten."
+      }
+    },
+    "error": {
+      "auth_error": "Authentifizierung fehlgeschlagen. Bitte überprüfen Sie Ihre Client-ID und versuchen Sie es erneut.",
+      "cannot_connect": "Verbindung zu BMW-Servern nicht möglich. Bitte versuchen Sie es später erneut.",
+      "timeout": "Autorisierung ist abgelaufen. Bitte versuchen Sie es erneut.",
+      "unknown": "Ein unerwarteter Fehler ist aufgetreten."
+    },
+    "abort": {
+      "already_configured": "Diese Client-ID ist bereits konfiguriert.",
+      "reauth_successful": "Erneute Authentifizierung erfolgreich."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BMW CarData Optionen",
+        "data": {
+          "enable_mqtt_streaming": "MQTT-Streaming aktivieren (Echtzeit-Updates)",
+          "enable_charging_history": "Ladehistorie aktivieren (Verwendet 1 API-Aufruf/Tag)",
+          "enable_tyre_diagnosis": "Reifendiagnose aktivieren (Verwendet 1 API-Aufruf/Tag)",
+          "poll_interval_minutes": "Fallback-Abfrageintervall (Minuten)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_soc": {
+        "name": "Batteriestand"
+      },
+      "battery_max_energy": {
+        "name": "Maximale Batterieenergie"
+      },
+      "electric_range": {
+        "name": "Elektrische Reichweite"
+      },
+      "charging_power": {
+        "name": "Ladeleistung"
+      },
+      "charging_level": {
+        "name": "Ladestand"
+      },
+      "charging_remaining_time": {
+        "name": "Verbleibende Ladezeit"
+      },
+      "charging_target_soc": {
+        "name": "Ladeziel"
+      },
+      "charging_status": {
+        "name": "Ladestatus"
+      },
+      "remaining_fuel": {
+        "name": "Verbleibender Kraftstoff"
+      },
+      "fuel_level": {
+        "name": "Tankfüllstand"
+      },
+      "fuel_range": {
+        "name": "Kraftstoffreichweite"
+      },
+      "mileage": {
+        "name": "Kilometerstand"
+      },
+      "odometer": {
+        "name": "Kilometerzähler"
+      },
+      "altitude": {
+        "name": "Höhe"
+      },
+      "heading": {
+        "name": "Richtung"
+      },
+      "interior_temperature": {
+        "name": "Innentemperatur"
+      },
+      "exterior_temperature": {
+        "name": "Außentemperatur"
+      },
+      "speed": {
+        "name": "Geschwindigkeit"
+      },
+      "tire_pressure_fl": {
+        "name": "Reifendruck vorne links"
+      },
+      "tire_pressure_fr": {
+        "name": "Reifendruck vorne rechts"
+      },
+      "tire_pressure_rl": {
+        "name": "Reifendruck hinten links"
+      },
+      "tire_pressure_rr": {
+        "name": "Reifendruck hinten rechts"
+      }
+    },
+    "binary_sensor": {
+      "door_driver": {
+        "name": "Fahrertür"
+      },
+      "door_passenger": {
+        "name": "Beifahrertür"
+      },
+      "door_rear_left": {
+        "name": "Hinten links Tür"
+      },
+      "door_rear_right": {
+        "name": "Hinten rechts Tür"
+      },
+      "trunk": {
+        "name": "Kofferraum"
+      },
+      "hood": {
+        "name": "Motorhaube"
+      },
+      "is_moving": {
+        "name": "In Bewegung"
+      },
+      "is_charging": {
+        "name": "Lädt"
+      },
+      "is_plugged_in": {
+        "name": "Angesteckt"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Standort"
+      }
+    },
+    "button": {
+      "refresh_data": {
+        "name": "Daten aktualisieren"
+      },
+      "refresh_tokens": {
+        "name": "Tokens aktualisieren"
+      }
+    }
+  },
+  "services": {
+    "refresh_tokens": {
+      "name": "Tokens aktualisieren",
+      "description": "Aktualisiert die BMW CarData Authentifizierungstokens."
+    },
+    "fetch_telematic_data": {
+      "name": "Telematikdaten abrufen",
+      "description": "Ruft Telematikdaten für ein bestimmtes Fahrzeug ab.",
+      "fields": {
+        "vin": {
+          "name": "FIN",
+          "description": "Fahrzeug-Identifizierungsnummer"
+        },
+        "container_id": {
+          "name": "Container-ID",
+          "description": "Telematikdaten-Container-ID"
+        }
+      }
+    }
+  }
+}

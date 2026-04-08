@@ -1,0 +1,13 @@
+{
+  "domain": "bmw_cardata",
+  "name": "BMW CarData",
+  "codeowners": ["@your-github-username"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/your-username/bmw-cardata-hacs",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/your-username/bmw-cardata-hacs/issues",
+  "requirements": ["paho-mqtt==1.6.1", "aiohttp>=3.8.0"],
+  "version": "1.0.0",
+  "integration_type": "hub"
+}

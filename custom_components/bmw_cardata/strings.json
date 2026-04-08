@@ -1,0 +1,179 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BMW CarData Setup",
+        "description": "Enter your BMW CarData Client ID. You can create one in the BMW portal under 'BMW CarData' section.\n\nPortal: {bmw_portal}",
+        "data": {
+          "client_id": "Client ID"
+        },
+        "data_description": {
+          "client_id": "Your BMW CarData Client ID from the BMW portal"
+        }
+      },
+      "authorize": {
+        "title": "Authorize Device",
+        "description": "Please authorize this device by visiting the link below and entering the code.\n\n**Verification URL:** {verification_url}\n\n**Code:** {user_code}\n\n**Note:** This code expires in {expires_minutes} minutes.\n\nClick Submit ONLY after the BMW page confirms successful authorization."
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate BMW CarData",
+        "description": "Your BMW CarData session has expired. Click Submit to start the re-authentication process."
+      }
+    },
+    "error": {
+      "auth_error": "Authentication failed. Please check your Client ID and try again.",
+      "cannot_connect": "Could not connect to BMW servers. Please try again later.",
+      "timeout": "Authorization timed out. Please try again.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Client ID is already configured.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BMW CarData Options",
+        "data": {
+          "enable_mqtt_streaming": "Enable MQTT Streaming (Real-time updates)",
+          "enable_charging_history": "Enable Charging History (Uses 1 API call/day)",
+          "enable_tyre_diagnosis": "Enable Tyre Diagnosis (Uses 1 API call/day)",
+          "poll_interval_minutes": "Fallback Poll Interval (minutes)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_soc": {
+        "name": "Battery Level"
+      },
+      "battery_max_energy": {
+        "name": "Battery Max Energy"
+      },
+      "electric_range": {
+        "name": "Electric Range"
+      },
+      "charging_power": {
+        "name": "Charging Power"
+      },
+      "charging_level": {
+        "name": "Charging Level"
+      },
+      "charging_remaining_time": {
+        "name": "Charging Time Remaining"
+      },
+      "charging_target_soc": {
+        "name": "Charging Target"
+      },
+      "charging_status": {
+        "name": "Charging Status"
+      },
+      "remaining_fuel": {
+        "name": "Remaining Fuel"
+      },
+      "fuel_level": {
+        "name": "Fuel Level"
+      },
+      "fuel_range": {
+        "name": "Fuel Range"
+      },
+      "mileage": {
+        "name": "Mileage"
+      },
+      "odometer": {
+        "name": "Odometer"
+      },
+      "altitude": {
+        "name": "Altitude"
+      },
+      "heading": {
+        "name": "Heading"
+      },
+      "interior_temperature": {
+        "name": "Interior Temperature"
+      },
+      "exterior_temperature": {
+        "name": "Exterior Temperature"
+      },
+      "speed": {
+        "name": "Speed"
+      },
+      "tire_pressure_fl": {
+        "name": "Front Left Tire Pressure"
+      },
+      "tire_pressure_fr": {
+        "name": "Front Right Tire Pressure"
+      },
+      "tire_pressure_rl": {
+        "name": "Rear Left Tire Pressure"
+      },
+      "tire_pressure_rr": {
+        "name": "Rear Right Tire Pressure"
+      }
+    },
+    "binary_sensor": {
+      "door_driver": {
+        "name": "Driver Door"
+      },
+      "door_passenger": {
+        "name": "Passenger Door"
+      },
+      "door_rear_left": {
+        "name": "Rear Left Door"
+      },
+      "door_rear_right": {
+        "name": "Rear Right Door"
+      },
+      "trunk": {
+        "name": "Trunk"
+      },
+      "hood": {
+        "name": "Hood"
+      },
+      "is_moving": {
+        "name": "Moving"
+      },
+      "is_charging": {
+        "name": "Charging"
+      },
+      "is_plugged_in": {
+        "name": "Plugged In"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Location"
+      }
+    },
+    "button": {
+      "refresh_data": {
+        "name": "Refresh Data"
+      },
+      "refresh_tokens": {
+        "name": "Refresh Tokens"
+      }
+    }
+  },
+  "services": {
+    "refresh_tokens": {
+      "name": "Refresh Tokens",
+      "description": "Refresh the BMW CarData authentication tokens."
+    },
+    "fetch_telematic_data": {
+      "name": "Fetch Telematic Data",
+      "description": "Fetch telematic data for a specific vehicle.",
+      "fields": {
+        "vin": {
+          "name": "VIN",
+          "description": "Vehicle Identification Number"
+        },
+        "container_id": {
+          "name": "Container ID",
+          "description": "Telematic data container ID"
+        }
+      }
+    }
+  }
+}
