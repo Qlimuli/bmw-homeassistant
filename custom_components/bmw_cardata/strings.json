@@ -28,7 +28,8 @@
     },
     "abort": {
       "already_configured": "This Client ID is already configured.",
-      "reauth_successful": "Re-authentication successful."
+      "reauth_successful": "Re-authentication successful.",
+      "unknown_error": "An unknown error occurred during setup."
     }
   },
   "options": {
