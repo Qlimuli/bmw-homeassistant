@@ -10,7 +10,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfLength,
@@ -26,11 +25,10 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import BMWCarDataCoordinator
+from . import BMWCarDataConfigEntry, BMWCarDataCoordinator
 from .const import (
     DOMAIN,
     MANUFACTURER,
-    TELEMATIC_DESCRIPTORS,
     BINARY_DESCRIPTORS,
     LOCATION_DESCRIPTORS,
 )
@@ -100,7 +98,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         name="Charging Status",
         icon="mdi:ev-plug-type2",
     ),
-    
+
     # Fuel
     "vehicle.drivetrain.fuelSystem.remainingFuel": SensorEntityDescription(
         key="remaining_fuel",
@@ -125,7 +123,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:gas-station-outline",
     ),
-    
+
     # Mileage
     "vehicle.powertrain.mileage": SensorEntityDescription(
         key="mileage",
@@ -143,7 +141,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.TOTAL_INCREASING,
         icon="mdi:counter",
     ),
-    
+
     # Location
     "vehicle.cabin.infotainment.navigation.currentLocation.altitude": SensorEntityDescription(
         key="altitude",
@@ -160,7 +158,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:compass",
     ),
-    
+
     # Climate
     "vehicle.cabin.hvac.temperature.interior": SensorEntityDescription(
         key="interior_temperature",
@@ -178,7 +176,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:thermometer",
     ),
-    
+
     # Speed
     "vehicle.powertrain.speed": SensorEntityDescription(
         key="speed",
@@ -188,7 +186,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:speedometer",
     ),
-    
+
     # Tire Pressure
     "vehicle.chassis.axle.row1.wheel.left.tire.pressure": SensorEntityDescription(
         key="tire_pressure_fl",
@@ -222,7 +220,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:tire",
     ),
-    
+
     # Window positions
     "vehicle.cabin.window.row1.driver.position": SensorEntityDescription(
         key="window_driver",
@@ -259,7 +257,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:car-select",
     ),
-    
+
     # Service
     "vehicle.service.serviceStatus": SensorEntityDescription(
         key="service_status",
@@ -278,7 +276,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         device_class=SensorDeviceClass.DISTANCE,
         icon="mdi:road-variant",
     ),
-    
+
     # Lock state
     "vehicle.body.door.lockState": SensorEntityDescription(
         key="lock_state",
@@ -290,27 +288,27 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: BMWCarDataConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up BMW CarData sensors."""
-    coordinator: BMWCarDataCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    
+    coordinator = entry.runtime_data.coordinator
+
     entities: list[BMWCarDataSensor] = []
-    
+
     # Wait for initial data
     vehicles = coordinator.get_all_vehicles()
-    
+
     for vin, vehicle_info in vehicles.items():
         # Get basic data for device info
         basic_data = coordinator.get_vehicle_data(vin).get("basic_data", {})
-        
+
         # Create sensors for all known descriptors
         for descriptor, description in SENSOR_DESCRIPTIONS.items():
             # Skip binary sensors and location sensors
             if descriptor in BINARY_DESCRIPTORS or descriptor in LOCATION_DESCRIPTORS:
                 continue
-            
+
             entities.append(
                 BMWCarDataSensor(
                     coordinator=coordinator,
@@ -321,15 +319,15 @@ async def async_setup_entry(
                     description=description,
                 )
             )
-    
+
     async_add_entities(entities)
 
 
 class BMWCarDataSensor(CoordinatorEntity[BMWCarDataCoordinator], SensorEntity):
     """BMW CarData Sensor Entity."""
-    
+
     _attr_has_entity_name = True
-    
+
     def __init__(
         self,
         coordinator: BMWCarDataCoordinator,
@@ -341,21 +339,21 @@ class BMWCarDataSensor(CoordinatorEntity[BMWCarDataCoordinator], SensorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        
+
         self._vin = vin
         self._descriptor = descriptor
         self._vehicle_info = vehicle_info
         self._basic_data = basic_data
-        
+
         self.entity_description = description
-        
+
         # Generate unique ID
         self._attr_unique_id = f"{vin}_{description.key}"
-        
+
         # Set device info
         model = basic_data.get("model", basic_data.get("bodyType", "BMW"))
         brand = basic_data.get("brand", "BMW")
-        
+
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, vin)},
             name=f"{brand} {model}",
@@ -364,40 +362,38 @@ class BMWCarDataSensor(CoordinatorEntity[BMWCarDataCoordinator], SensorEntity):
             sw_version=basic_data.get("softwareVersion"),
             hw_version=basic_data.get("driveTrain"),
         )
-    
+
     @property
     def native_value(self) -> Any:
         """Return the state of the sensor."""
         value = self.coordinator.get_sensor_value(self._vin, self._descriptor)
-        
+
         if value is None:
             return None
-        
+
         # Convert values if needed
         if isinstance(value, (int, float)):
             # Round to reasonable precision
             if self.entity_description.native_unit_of_measurement == PERCENTAGE:
                 return round(value, 1)
-            elif self.entity_description.device_class == SensorDeviceClass.TEMPERATURE:
+            if self.entity_description.device_class == SensorDeviceClass.TEMPERATURE:
                 return round(value, 1)
-            elif self.entity_description.device_class == SensorDeviceClass.PRESSURE:
+            if self.entity_description.device_class == SensorDeviceClass.PRESSURE:
                 return round(value, 2)
-            else:
-                return round(value, 2) if isinstance(value, float) else value
-        
+            return round(value, 2) if isinstance(value, float) else value
+
         return value
-    
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes."""
-        vehicle_data = self.coordinator.get_vehicle_data(self._vin)
         mqtt_data = self.coordinator._mqtt_data.get(self._vin, {})
-        
-        attrs = {
+
+        attrs: dict[str, Any] = {
             "vin": self._vin,
             "descriptor": self._descriptor,
         }
-        
+
         # Add timestamp if available
         if self._descriptor in mqtt_data:
             data = mqtt_data[self._descriptor]
@@ -406,9 +402,9 @@ class BMWCarDataSensor(CoordinatorEntity[BMWCarDataCoordinator], SensorEntity):
                     attrs["last_updated"] = data["timestamp"]
                 if "unit" in data:
                     attrs["source_unit"] = data["unit"]
-        
+
         return attrs
-    
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""

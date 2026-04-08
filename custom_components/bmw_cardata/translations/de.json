@@ -28,7 +28,8 @@
     },
     "abort": {
       "already_configured": "Diese Client-ID ist bereits konfiguriert.",
-      "reauth_successful": "Erneute Authentifizierung erfolgreich."
+      "reauth_successful": "Erneute Authentifizierung erfolgreich.",
+      "unknown_error": "Ein unbekannter Fehler ist während der Einrichtung aufgetreten."
     }
   },
   "options": {

@@ -7,10 +7,13 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant import config_entries
-from homeassistant.const import CONF_NAME
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -32,35 +35,36 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
-class BMWCarDataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class BMWCarDataConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for BMW CarData."""
-    
-    VERSION = 1
-    
+
+    VERSION = 2
+    MINOR_VERSION = 1
+
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._client_id: str | None = None
         self._api: BMWCarDataAPI | None = None
         self._device_code_response: dict[str, Any] | None = None
-        self._poll_task: asyncio.Task | None = None
-    
+        self._reauth_entry: ConfigEntry | None = None
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
-        
+
         if user_input is not None:
             self._client_id = user_input[CONF_CLIENT_ID]
-            
+
             # Check if already configured
             await self.async_set_unique_id(self._client_id)
             self._abort_if_unique_id_configured()
-            
+
             # Initialize API and request device code
             session = async_get_clientsession(self.hass)
             self._api = BMWCarDataAPI(session=session, client_id=self._client_id)
-            
+
             try:
                 self._device_code_response = await self._api.async_request_device_code()
                 return await self.async_step_authorize()
@@ -70,7 +74,7 @@ class BMWCarDataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except BMWCarDataAPIError as err:
                 _LOGGER.error("API error: %s", err)
                 errors["base"] = "cannot_connect"
-        
+
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
@@ -79,49 +83,64 @@ class BMWCarDataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "bmw_portal": "https://www.bmw.de/de-de/mybmw/vehicle-overview",
             },
         )
-    
+
     async def async_step_authorize(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the authorization step."""
         errors: dict[str, str] = {}
-        
+
+        if self._device_code_response is None or self._api is None:
+            return self.async_abort(reason="unknown_error")
+
         if user_input is not None:
             # User claims to have authorized, poll for token
             try:
                 max_attempts = 30
                 for _ in range(max_attempts):
                     result = await self._api.async_poll_for_token()
-                    
+
                     if result.get("status") == "success":
                         # Successfully authenticated
+                        data = {
+                            CONF_CLIENT_ID: self._client_id,
+                            CONF_ACCESS_TOKEN: result["access_token"],
+                            CONF_REFRESH_TOKEN: result["refresh_token"],
+                            CONF_ID_TOKEN: result["id_token"],
+                            CONF_GCID: result["gcid"],
+                        }
+
+                        if self._reauth_entry:
+                            # Update existing entry
+                            self.hass.config_entries.async_update_entry(
+                                self._reauth_entry, data=data
+                            )
+                            await self.hass.config_entries.async_reload(
+                                self._reauth_entry.entry_id
+                            )
+                            return self.async_abort(reason="reauth_successful")
+
                         return self.async_create_entry(
                             title=f"BMW CarData ({self._client_id[:8]}...)",
-                            data={
-                                CONF_CLIENT_ID: self._client_id,
-                                CONF_ACCESS_TOKEN: result["access_token"],
-                                CONF_REFRESH_TOKEN: result["refresh_token"],
-                                CONF_ID_TOKEN: result["id_token"],
-                                CONF_GCID: result["gcid"],
-                            },
+                            data=data,
                         )
-                    elif result.get("status") == "pending":
+                    if result.get("status") == "pending":
                         # Still waiting
                         await asyncio.sleep(2)
                     elif result.get("status") == "slow_down":
                         await asyncio.sleep(5)
                     else:
                         break
-                
+
                 errors["base"] = "timeout"
-                
+
             except BMWCarDataAuthError as err:
                 _LOGGER.error("Authorization error: %s", err)
                 errors["base"] = "auth_error"
             except BMWCarDataAPIError as err:
                 _LOGGER.error("API error: %s", err)
                 errors["base"] = "cannot_connect"
-        
+
         # Show authorization instructions
         verification_uri = self._device_code_response.get(
             "verification_uri_complete",
@@ -129,7 +148,7 @@ class BMWCarDataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         user_code = self._device_code_response.get("user_code", "")
         expires_in = self._device_code_response.get("expires_in", 900)
-        
+
         return self.async_show_form(
             step_id="authorize",
             data_schema=vol.Schema({}),
@@ -140,61 +159,63 @@ class BMWCarDataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "expires_minutes": str(expires_in // 60),
             },
         )
-    
+
     async def async_step_reauth(
         self, entry_data: dict[str, Any]
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle re-authentication."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
         self._client_id = entry_data.get(CONF_CLIENT_ID)
         return await self.async_step_reauth_confirm()
-    
+
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle re-authentication confirmation."""
         errors: dict[str, str] = {}
-        
+
         if user_input is not None:
             # Re-initiate device code flow
             session = async_get_clientsession(self.hass)
             self._api = BMWCarDataAPI(session=session, client_id=self._client_id)
-            
+
             try:
                 self._device_code_response = await self._api.async_request_device_code()
                 return await self.async_step_authorize()
             except BMWCarDataAuthError as err:
                 _LOGGER.error("Re-auth error: %s", err)
                 errors["base"] = "auth_error"
-        
+            except BMWCarDataAPIError as err:
+                _LOGGER.error("API error: %s", err)
+                errors["base"] = "cannot_connect"
+
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema({}),
             errors=errors,
         )
-    
+
     @staticmethod
     @callback
     def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
+        config_entry: ConfigEntry,
+    ) -> OptionsFlow:
         """Create the options flow."""
-        return BMWCarDataOptionsFlowHandler(config_entry)
+        return BMWCarDataOptionsFlowHandler()
 
 
-class BMWCarDataOptionsFlowHandler(config_entries.OptionsFlow):
+class BMWCarDataOptionsFlowHandler(OptionsFlow):
     """Handle options flow for BMW CarData."""
-    
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
-    
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-        
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(

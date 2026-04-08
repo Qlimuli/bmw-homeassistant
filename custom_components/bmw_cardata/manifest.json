@@ -5,9 +5,10 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/your-username/bmw-cardata-hacs",
+  "integration_type": "hub",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/your-username/bmw-cardata-hacs/issues",
-  "requirements": ["paho-mqtt==1.6.1", "aiohttp>=3.8.0"],
-  "version": "1.0.0",
-  "integration_type": "hub"
+  "loggers": ["bmw_cardata"],
+  "requirements": ["paho-mqtt>=2.0.0,<3.0.0"],
+  "version": "2026.4.0"
 }
