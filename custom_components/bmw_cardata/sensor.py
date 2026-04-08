@@ -50,7 +50,7 @@ SENSOR_DESCRIPTIONS: dict[str, SensorEntityDescription] = {
         key="battery_max_energy",
         name="Battery Max Energy",
         native_unit_of_measurement="kWh",
-        device_class=SensorDeviceClass.ENERGY,
+        device_class=SensorDeviceClass.ENERGY_STORAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:battery-high",
     ),
