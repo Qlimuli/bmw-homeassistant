@@ -288,9 +288,10 @@ class BMWCarDataAPI:
                 # Handle errors
                 if response.status == 403:
                     result = await response.json()
-                    error_id = result.get("errorId", "")
+                    # BMW returns the error code under "exveErrorId" (not "errorId")
+                    error_id = result.get("exveErrorId") or result.get("errorId", "")
                     if error_id == "CU-429":
-                        raise BMWCarDataRateLimitError("API rate limit exceeded")
+                        raise BMWCarDataRateLimitError(f"Access denied: {result}")
                     raise BMWCarDataAuthError(f"Access denied: {result}")
                 
                 if response.status == 401:
