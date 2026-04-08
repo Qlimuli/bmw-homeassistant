@@ -107,11 +107,12 @@ class BMWMQTTClient:
                 use_tls = True
 
             # Create MQTT client with paho-mqtt 2.x API
+            # BMW's streaming endpoint on port 9000 uses MQTT-over-WebSocket (WSS)
             self._client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
                 client_id=f"bmw_cardata_{self._gcid[:8]}",
                 protocol=mqtt.MQTTv311,
-                transport="tcp",
+                transport="websockets",
             )
 
             # Set callbacks
@@ -123,7 +124,11 @@ class BMWMQTTClient:
             if use_tls:
                 ssl_context = ssl.create_default_context()
                 ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+                ssl_context.check_hostname = True
+                ssl_context.verify_mode = ssl.CERT_REQUIRED
                 self._client.tls_set_context(ssl_context)
+                # WebSocket path used by BMW's MQTT broker
+                self._client.ws_set_options(path="/mqtt")
 
             # Set credentials for BMW broker
             if not self._custom_broker:
@@ -157,7 +162,7 @@ class BMWMQTTClient:
         properties: mqtt.Properties | None = None,
     ) -> None:
         """Handle MQTT connection (paho-mqtt 2.x callback signature)."""
-        if reason_code == mqtt.ReasonCode(mqtt.CONNACK_ACCEPTED):
+        if not reason_code.is_failure:
             self._connected = True
             self._consecutive_failures = 0
             _LOGGER.info("BMW MQTT client connected")
@@ -184,7 +189,7 @@ class BMWMQTTClient:
         """Handle MQTT disconnection (paho-mqtt 2.x callback signature)."""
         self._connected = False
 
-        if reason_code != mqtt.ReasonCode(mqtt.MQTT_ERR_SUCCESS):
+        if reason_code.is_failure:
             _LOGGER.warning(
                 "BMW MQTT client disconnected unexpectedly (reason=%s)", reason_code
             )
