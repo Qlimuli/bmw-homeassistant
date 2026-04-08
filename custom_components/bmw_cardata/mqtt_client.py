@@ -121,14 +121,22 @@ class BMWMQTTClient:
             self._client.on_message = self._on_message
 
             # Configure TLS
+            # ssl.create_default_context() performs blocking disk I/O (loading CA certs),
+            # so it must run in an executor to avoid blocking the HA event loop.
             if use_tls:
-                ssl_context = ssl.create_default_context()
+                ssl_context = await self.hass.async_add_executor_job(
+                    ssl.create_default_context
+                )
                 ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
                 ssl_context.check_hostname = True
                 ssl_context.verify_mode = ssl.CERT_REQUIRED
                 self._client.tls_set_context(ssl_context)
-                # WebSocket path used by BMW's MQTT broker
-                self._client.ws_set_options(path="/mqtt")
+                # BMW's broker requires the Bearer token in the HTTP Upgrade request
+                # headers (in addition to MQTT username/password credentials).
+                self._client.ws_set_options(
+                    path="/mqtt",
+                    headers={"Authorization": f"Bearer {self._id_token}"},
+                )
 
             # Set credentials for BMW broker
             if not self._custom_broker:
