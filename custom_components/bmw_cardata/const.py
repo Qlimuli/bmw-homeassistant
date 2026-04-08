@@ -16,8 +16,8 @@ CONF_VEHICLES: Final = "vehicles"
 # API Endpoints
 BMW_AUTH_URL: Final = "https://customer.bmwgroup.com/gcdm/oauth"
 BMW_API_URL: Final = "https://api-cardata.bmwgroup.com"
-BMW_MQTT_HOST: Final = "mqtt.2go-streaming.net"
-BMW_MQTT_PORT: Final = 8883
+BMW_MQTT_HOST: Final = "customer.streaming-cardata.bmwgroup.com"
+BMW_MQTT_PORT: Final = 9000
 
 # OAuth2 Settings
 OAUTH_SCOPES: Final = "authenticate_user openid cardata:streaming:read cardata:api:read"
