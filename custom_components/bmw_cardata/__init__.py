@@ -82,11 +82,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: BMWCarDataConfigEntry) -
     await coordinator.async_config_entry_first_refresh()
 
     # Initialize MQTT client for streaming
+    # Use freshly-refreshed tokens from the API (not the potentially-stale ones stored in entry.data)
     mqtt_client = BMWMQTTClient(
         hass=hass,
         coordinator=coordinator,
-        gcid=entry.data.get(CONF_GCID, ""),
-        id_token=entry.data.get(CONF_ID_TOKEN, ""),
+        gcid=api.gcid or entry.data.get(CONF_GCID, ""),
+        id_token=api.id_token or entry.data.get(CONF_ID_TOKEN, ""),
     )
 
     # Store runtime data using the new pattern
