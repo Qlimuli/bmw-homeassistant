@@ -127,7 +127,7 @@ class BMWMQTTClient:
                 ssl_context = await self.hass.async_add_executor_job(
                     ssl.create_default_context
                 )
-                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3  # <-- GEÄNDERT (war TLSv1_2) → behebt WebSocket handshake error
                 ssl_context.check_hostname = True
                 ssl_context.verify_mode = ssl.CERT_REQUIRED
                 self._client.tls_set_context(ssl_context)
@@ -256,68 +256,23 @@ class BMWMQTTClient:
                         "unit": value_data.get("unit"),
                         "timestamp": value_data.get("timestamp", timestamp),
                     }
-                else:
-                    processed_data[descriptor] = {
-                        "value": value_data,
-                        "timestamp": timestamp,
-                    }
 
-            # Update coordinator
-            asyncio.run_coroutine_threadsafe(
-                self._async_update_coordinator(vin, processed_data),
-                self.hass.loop,
-            )
+            # Update coordinator with processed MQTT data
+            if processed_data and vin:
+                asyncio.run_coroutine_threadsafe(
+                    self.coordinator.async_handle_mqtt_data(vin, processed_data, timestamp),
+                    self.hass.loop,
+                )
 
-        except json.JSONDecodeError as err:
-            _LOGGER.error("Failed to parse MQTT message: %s", err)
         except Exception as err:
             _LOGGER.error("Error processing MQTT message: %s", err)
 
-    async def _async_update_coordinator(
-        self,
-        vin: str,
-        data: dict[str, Any],
-    ) -> None:
-        """Update the coordinator with new data."""
-        self.coordinator.update_mqtt_data(vin, data)
-
-    def _subscribe_to_vehicles(self) -> None:
-        """Subscribe to vehicle topics."""
-        if not self._client or not self._connected:
-            return
-
-        # Get vehicles from coordinator
-        vehicles = self.coordinator.get_all_vehicles()
-
-        # Subscribe to each vehicle's topic
-        for vin in vehicles:
-            topic = f"{self._gcid}/{vin}"
-            if vin not in self._subscribed_vins:
-                self._client.subscribe(topic, qos=1)
-                self._subscribed_vins.add(vin)
-                _LOGGER.info("Subscribed to BMW MQTT topic for VIN %s", vin[-4:])
-
-        # Also subscribe to wildcard if no specific VINs
-        if not vehicles:
-            topic = f"{self._gcid}/#"
-            self._client.subscribe(topic, qos=1)
-            _LOGGER.info("Subscribed to BMW MQTT wildcard topic")
-
-    def add_vehicle_subscription(self, vin: str) -> None:
-        """Add subscription for a new vehicle."""
-        if self._client and self._connected and vin not in self._subscribed_vins:
-            topic = f"{self._gcid}/{vin}"
-            self._client.subscribe(topic, qos=1)
-            self._subscribed_vins.add(vin)
-            _LOGGER.info("Added BMW MQTT subscription for VIN %s", vin[-4:])
-
     async def _schedule_reconnect(self) -> None:
-        """Schedule a reconnection attempt."""
+        """Schedule a reconnection with exponential backoff."""
         if self._stop_event.is_set():
             return
 
         self._consecutive_failures += 1
-
         if self._consecutive_failures > self._max_failures:
             _LOGGER.error(
                 "BMW MQTT: Too many consecutive failures (%s), stopping reconnection",
@@ -325,50 +280,32 @@ class BMWMQTTClient:
             )
             return
 
-        # Calculate backoff delay
-        delay = min(
+        backoff = min(
             self._backoff_base * (2 ** (self._consecutive_failures - 1)),
             self._max_backoff,
         )
-
         _LOGGER.info(
-            "BMW MQTT: Scheduling reconnection in %s seconds (attempt %s)",
-            delay,
+            "BMW MQTT: Reconnecting in %s seconds (failure %s)",
+            backoff,
             self._consecutive_failures,
         )
 
-        await asyncio.sleep(delay)
-
+        await asyncio.sleep(backoff)
         if not self._stop_event.is_set():
-            # Refresh token before reconnecting
-            try:
-                await self.coordinator.api.async_refresh_tokens()
-                self._id_token = self.coordinator.api.id_token or self._id_token
-            except Exception as err:
-                _LOGGER.error("Failed to refresh token for MQTT: %s", err)
-
             await self._async_connect()
 
-    async def async_refresh_connection(self) -> None:
-        """Refresh the connection with new credentials."""
-        _LOGGER.info("Refreshing BMW MQTT connection with new credentials")
+    def _subscribe_to_vehicles(self) -> None:
+        """Subscribe to all vehicle MQTT topics."""
+        if not self._client or not self._connected:
+            return
 
-        # Stop current connection
-        if self._client:
-            self._client.disconnect()
-            self._client.loop_stop()
-            self._client = None
+        # Coordinator provides the list of VINs (standard in this integration)
+        vins = getattr(self.coordinator, "vins", []) or []
+        for vin in vins:
+            if vin not in self._subscribed_vins:
+                topic = f"{self._gcid}/{vin}"
+                self._client.subscribe(topic)
+                self._subscribed_vins.add(vin)
+                _LOGGER.debug("Subscribed to MQTT topic: %s", topic)
 
-        self._connected = False
-        self._subscribed_vins.clear()
-
-        # Get fresh tokens
-        try:
-            await self.coordinator.api.async_refresh_tokens()
-            self._id_token = self.coordinator.api.id_token or self._id_token
-            self._gcid = self.coordinator.api.gcid or self._gcid
-        except Exception as err:
-            _LOGGER.error("Failed to refresh tokens: %s", err)
-
-        # Reconnect
-        await self._async_connect()
+        _LOGGER.info("BMW MQTT: Subscribed to %s vehicle topics", len(self._subscribed_vins))
