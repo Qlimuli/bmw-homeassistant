@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -23,6 +23,7 @@ from .const import (
     CONF_ID_TOKEN,
     CONF_GCID,
     DEBUG_LOG,
+    API_RATE_LIMIT_RESET_HOURS,
 )
 from .api import BMWCarDataAPI, BMWCarDataAuthError, BMWCarDataAPIError, BMWCarDataRateLimitError
 from .mqtt_client import BMWMQTTClient
@@ -82,8 +83,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: BMWCarDataConfigEntry) -
     # Initialize coordinator
     coordinator = BMWCarDataCoordinator(hass, api, entry)
 
-    # Fetch initial data
-    await coordinator.async_config_entry_first_refresh()
+    # Fetch initial data.
+    # We intentionally use async_refresh() instead of async_config_entry_first_refresh()
+    # here. The latter converts UpdateFailed → ConfigEntryNotReady, which makes HA
+    # retry the entire setup — burning another API call on every attempt and causing a
+    # retry storm when the daily rate limit (CU-429) is active. async_refresh() absorbs
+    # the failure gracefully: entities start as unavailable and populate on the next
+    # scheduled poll (POLL_INTERVAL = 30 min).
+    await coordinator.async_refresh()
 
     # Initialize MQTT client for streaming
     # Use freshly-refreshed tokens from the API (not the potentially-stale ones stored in entry.data)
@@ -194,6 +201,9 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.vehicles: dict[str, dict[str, Any]] = {}
         self.vehicle_data: dict[str, dict[str, Any]] = {}
         self._mqtt_data: dict[str, dict[str, Any]] = {}
+        # Rate-limit circuit breaker: when set, all API calls are skipped until
+        # this timestamp has passed (daily limit resets after API_RATE_LIMIT_RESET_HOURS).
+        self._rate_limit_until: datetime | None = None
 
     def update_mqtt_data(self, vin: str, data: dict[str, Any]) -> None:
         """Update data received from MQTT stream."""
@@ -215,6 +225,22 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from API (fallback polling)."""
+        # Rate-limit circuit breaker: skip all API calls until the block expires.
+        if self._rate_limit_until is not None:
+            now = datetime.now(tz=timezone.utc)
+            if now < self._rate_limit_until:
+                remaining = int((self._rate_limit_until - now).total_seconds() / 60)
+                _LOGGER.debug(
+                    "BMW API rate limit active, skipping poll (%d min remaining). "
+                    "MQTT streaming still active.",
+                    remaining,
+                )
+                # Return cached data — no UpdateFailed, no retry storm.
+                return self.vehicle_data
+            else:
+                _LOGGER.info("BMW API rate limit window expired, resuming polling.")
+                self._rate_limit_until = None
+
         try:
             # Refresh tokens if needed
             await self.api.async_refresh_tokens()
@@ -267,11 +293,19 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.vehicle_data
 
         except BMWCarDataRateLimitError as err:
-            # Treat rate limit as a temporary failure — UpdateFailed causes the
-            # coordinator to wait until the next poll interval instead of
-            # triggering a re-auth flow that would burn more API calls.
-            _LOGGER.warning("BMW API rate limit reached, skipping update: %s", err)
-            raise UpdateFailed(f"BMW API rate limit reached: {err}") from err
+            # Set the circuit breaker: skip API calls for the full daily reset window.
+            self._rate_limit_until = datetime.now(tz=timezone.utc) + timedelta(
+                hours=API_RATE_LIMIT_RESET_HOURS
+            )
+            _LOGGER.warning(
+                "BMW API daily rate limit reached. Polling suspended for %d hours "
+                "until %s. MQTT streaming remains active.",
+                API_RATE_LIMIT_RESET_HOURS,
+                self._rate_limit_until.strftime("%H:%M UTC"),
+            )
+            # Return cached data so HA keeps the last-known values visible and
+            # the coordinator does NOT reschedule with a shortened retry interval.
+            return self.vehicle_data
         except BMWCarDataAuthError as err:
             _LOGGER.error("Authentication error: %s", err)
             raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
