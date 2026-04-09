@@ -90,15 +90,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: BMWCarDataConfigEntry) -
     # retry storm when the daily rate limit (CU-429) is active. async_refresh() absorbs
     # the failure gracefully: entities start as unavailable and populate on the next
     # scheduled poll (POLL_INTERVAL = 30 min).
-    await coordinator.async_refresh()
+    try:
+        await coordinator.async_refresh()
+    except Exception as err:
+        # Log but don't fail setup - MQTT might still work
+        _LOGGER.warning(
+            "Initial data fetch failed (rate limit or network issue): %s. "
+            "Entities will populate when API becomes available. MQTT streaming will still be attempted.",
+            err,
+        )
 
     # Initialize MQTT client for streaming
     # Use freshly-refreshed tokens from the API (not the potentially-stale ones stored in entry.data)
+    gcid = api.gcid or entry.data.get(CONF_GCID, "")
+    id_token = api.id_token or entry.data.get(CONF_ID_TOKEN, "")
+    
+    if not gcid or not id_token:
+        _LOGGER.warning(
+            "BMW MQTT: Missing GCID or ID token. MQTT streaming will not be available "
+            "until tokens are refreshed."
+        )
+    
     mqtt_client = BMWMQTTClient(
         hass=hass,
         coordinator=coordinator,
-        gcid=api.gcid or entry.data.get(CONF_GCID, ""),
-        id_token=api.id_token or entry.data.get(CONF_ID_TOKEN, ""),
+        gcid=gcid,
+        id_token=id_token,
     )
 
     # Store runtime data using the new pattern
@@ -108,8 +125,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: BMWCarDataConfigEntry) -
         mqtt_client=mqtt_client,
     )
 
-    # Start MQTT streaming
-    await mqtt_client.async_start()
+    # Start MQTT streaming (will handle missing credentials gracefully)
+    if gcid and id_token:
+        await mqtt_client.async_start()
+    else:
+        _LOGGER.info("BMW MQTT: Skipping start due to missing credentials")
 
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -205,8 +225,13 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # this timestamp has passed (daily limit resets after API_RATE_LIMIT_RESET_HOURS).
         self._rate_limit_until: datetime | None = None
 
+    @property
+    def vins(self) -> list[str]:
+        """Return list of VINs for MQTT subscription."""
+        return list(self.vehicles.keys())
+
     def update_mqtt_data(self, vin: str, data: dict[str, Any]) -> None:
-        """Update data received from MQTT stream."""
+        """Update data received from MQTT stream (sync version)."""
         if vin not in self._mqtt_data:
             self._mqtt_data[vin] = {}
 
@@ -223,6 +248,40 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if DEBUG_LOG:
             _LOGGER.debug("MQTT data updated for VIN %s: %s", vin, data)
 
+    async def async_handle_mqtt_data(
+        self, vin: str, data: dict[str, Any], timestamp: str | None = None
+    ) -> None:
+        """Handle MQTT data asynchronously (called from MQTT client)."""
+        if vin not in self._mqtt_data:
+            self._mqtt_data[vin] = {}
+
+        # Add timestamp to each data point if provided
+        if timestamp:
+            for key, value in data.items():
+                if isinstance(value, dict) and "timestamp" not in value:
+                    value["timestamp"] = timestamp
+
+        self._mqtt_data[vin].update(data)
+
+        # Merge into vehicle_data
+        if vin not in self.vehicle_data:
+            self.vehicle_data[vin] = {}
+        
+        # Store MQTT data under 'mqtt' key to distinguish from API data
+        if "mqtt" not in self.vehicle_data[vin]:
+            self.vehicle_data[vin]["mqtt"] = {}
+        self.vehicle_data[vin]["mqtt"].update(data)
+
+        # Notify listeners that data has updated
+        self.async_set_updated_data(self.vehicle_data)
+
+        if DEBUG_LOG:
+            _LOGGER.debug(
+                "MQTT data received for VIN %s: %d data points",
+                vin[-4:] if len(vin) > 4 else vin,
+                len(data),
+            )
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from API (fallback polling)."""
         # Rate-limit circuit breaker: skip all API calls until the block expires.
@@ -230,11 +289,12 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             now = datetime.now(tz=timezone.utc)
             if now < self._rate_limit_until:
                 remaining = int((self._rate_limit_until - now).total_seconds() / 60)
-                _LOGGER.debug(
-                    "BMW API rate limit active, skipping poll (%d min remaining). "
-                    "MQTT streaming still active.",
-                    remaining,
-                )
+                if DEBUG_LOG:
+                    _LOGGER.debug(
+                        "BMW API rate limit active, skipping poll (%d min remaining). "
+                        "MQTT streaming still active.",
+                        remaining,
+                    )
                 # Return cached data — no UpdateFailed, no retry storm.
                 return self.vehicle_data
             else:
@@ -245,7 +305,7 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Refresh tokens if needed
             await self.api.async_refresh_tokens()
 
-            # Update stored tokens
+            # Update stored tokens and notify MQTT client
             if self.config_entry:
                 new_data = {
                     **self.config_entry.data,
@@ -258,38 +318,88 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.hass.config_entries.async_update_entry(
                         self.config_entry, data=new_data
                     )
+                    # Update MQTT client with new tokens
+                    if (
+                        hasattr(self.config_entry, "runtime_data")
+                        and self.config_entry.runtime_data
+                    ):
+                        mqtt_client = self.config_entry.runtime_data.mqtt_client
+                        if mqtt_client and self.api.id_token:
+                            mqtt_client.update_tokens(
+                                self.api.id_token, self.api.gcid
+                            )
 
-            # Get vehicle mappings
+            # Get vehicle mappings (1 API call)
             mappings = await self.api.async_get_vehicle_mappings()
+            
+            if not mappings:
+                _LOGGER.debug("BMW API: No vehicle mappings found")
+                return self.vehicle_data
+
+            # Get containers once (1 API call) - not per vehicle
+            containers = []
+            try:
+                containers = await self.api.async_get_containers()
+            except BMWCarDataRateLimitError:
+                raise  # Re-raise rate limit errors
+            except BMWCarDataAPIError as err:
+                _LOGGER.warning("Failed to fetch containers: %s", err)
+
+            # Find active container
+            active_container_id = None
+            for container in containers:
+                if container.get("state") == "ACTIVE":
+                    active_container_id = container.get("containerId")
+                    break
 
             for mapping in mappings:
                 vin = mapping.get("vin")
                 if not vin:
                     continue
 
+                # Check if this is a new VIN
+                is_new_vin = vin not in self.vehicles
+                
                 # Store vehicle info
                 self.vehicles[vin] = mapping
 
-                # Get basic vehicle data
-                basic_data = await self.api.async_get_basic_data(vin)
-                if basic_data:
-                    if vin not in self.vehicle_data:
-                        self.vehicle_data[vin] = {}
-                    self.vehicle_data[vin]["basic_data"] = basic_data
+                if vin not in self.vehicle_data:
+                    self.vehicle_data[vin] = {}
+                
+                # Subscribe MQTT client to new VINs
+                if is_new_vin and hasattr(self.config_entry, "runtime_data") and self.config_entry.runtime_data:
+                    mqtt_client = self.config_entry.runtime_data.mqtt_client
+                    if mqtt_client and mqtt_client.is_connected:
+                        mqtt_client.subscribe_vin(vin)
 
-                # Get telematic data if container exists
-                containers = await self.api.async_get_containers()
-                for container in containers:
-                    if container.get("state") == "ACTIVE":
-                        container_id = container.get("containerId")
+                # Get basic vehicle data (1 API call per vehicle)
+                try:
+                    basic_data = await self.api.async_get_basic_data(vin)
+                    if basic_data:
+                        self.vehicle_data[vin]["basic_data"] = basic_data
+                except BMWCarDataRateLimitError:
+                    raise  # Re-raise rate limit errors
+                except BMWCarDataAPIError as err:
+                    _LOGGER.warning("Failed to fetch basic data for %s: %s", vin[-4:], err)
+
+                # Get telematic data if we have an active container (1 API call per vehicle)
+                if active_container_id:
+                    try:
                         telematic_data = await self.api.async_get_telematic_data(
-                            vin, container_id
+                            vin, active_container_id
                         )
                         if telematic_data:
-                            if vin not in self.vehicle_data:
-                                self.vehicle_data[vin] = {}
                             self.vehicle_data[vin]["telematic"] = telematic_data
+                    except BMWCarDataRateLimitError:
+                        raise  # Re-raise rate limit errors
+                    except BMWCarDataAPIError as err:
+                        _LOGGER.warning(
+                            "Failed to fetch telematic data for %s: %s", vin[-4:], err
+                        )
 
+            _LOGGER.debug(
+                "BMW API poll complete: %d vehicles updated", len(self.vehicles)
+            )
             return self.vehicle_data
 
         except BMWCarDataRateLimitError as err:
@@ -307,10 +417,10 @@ class BMWCarDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # the coordinator does NOT reschedule with a shortened retry interval.
             return self.vehicle_data
         except BMWCarDataAuthError as err:
-            _LOGGER.error("Authentication error: %s", err)
+            _LOGGER.error("BMW API authentication error: %s", err)
             raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
         except BMWCarDataAPIError as err:
-            _LOGGER.error("Error fetching BMW CarData: %s", err)
+            _LOGGER.error("BMW API error: %s", err)
             raise UpdateFailed(f"Error communicating with BMW API: {err}") from err
 
     def get_vehicle_data(self, vin: str) -> dict[str, Any]:

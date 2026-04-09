@@ -281,17 +281,29 @@ class BMWCarDataAPI:
                 headers=headers,
                 timeout=API_TIMEOUT,
             ) as response:
-                # Handle rate limit
+                # Handle rate limit (HTTP 429 or BMW-specific CU-429)
                 if response.status == 429:
-                    raise BMWCarDataRateLimitError("API rate limit exceeded")
+                    retry_after = response.headers.get("Retry-After", "unknown")
+                    raise BMWCarDataRateLimitError(
+                        f"API rate limit exceeded (HTTP 429). Retry-After: {retry_after}"
+                    )
                 
                 # Handle errors
                 if response.status == 403:
-                    result = await response.json()
+                    try:
+                        result = await response.json()
+                    except Exception:
+                        result = {"raw": await response.text()}
+                    
                     # BMW returns the error code under "exveErrorId" (not "errorId")
                     error_id = result.get("exveErrorId") or result.get("errorId", "")
-                    if error_id == "CU-429":
-                        raise BMWCarDataRateLimitError(f"Access denied: {result}")
+                    error_msg = result.get("exveErrorMessage") or result.get("message", "")
+                    
+                    # CU-429 is BMW's daily quota exceeded error
+                    if error_id == "CU-429" or "rate" in error_msg.lower() or "quota" in error_msg.lower():
+                        raise BMWCarDataRateLimitError(
+                            f"BMW daily API quota exceeded (CU-429): {error_msg or result}"
+                        )
                     raise BMWCarDataAuthError(f"Access denied: {result}")
                 
                 if response.status == 401:

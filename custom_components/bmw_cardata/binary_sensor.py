@@ -173,8 +173,41 @@ async def async_setup_entry(
 
     entities: list[BMWCarDataBinarySensor] = []
 
-    # Get all vehicles
+    # Get all vehicles - may be empty if rate limited on startup
     vehicles = coordinator.get_all_vehicles()
+
+    if not vehicles:
+        _LOGGER.debug(
+            "BMW CarData: No vehicles found during binary sensor setup. "
+            "Sensors will be created when vehicle data becomes available."
+        )
+        # Register a listener to add entities when vehicles become available
+        async def async_add_binary_sensors_when_available() -> None:
+            """Add binary sensor entities when vehicle data becomes available."""
+            vehicles = coordinator.get_all_vehicles()
+            if vehicles:
+                new_entities: list[BMWCarDataBinarySensor] = []
+                for vin, vehicle_info in vehicles.items():
+                    basic_data = coordinator.get_vehicle_data(vin).get("basic_data", {})
+                    for descriptor, description in BINARY_SENSOR_DESCRIPTIONS.items():
+                        new_entities.append(
+                            BMWCarDataBinarySensor(
+                                coordinator=coordinator,
+                                vin=vin,
+                                vehicle_info=vehicle_info,
+                                basic_data=basic_data,
+                                descriptor=descriptor,
+                                description=description,
+                            )
+                        )
+                if new_entities:
+                    async_add_entities(new_entities)
+                    _LOGGER.info("BMW CarData: Added %d binary sensor entities", len(new_entities))
+        
+        entry.async_on_unload(
+            coordinator.async_add_listener(async_add_binary_sensors_when_available)
+        )
+        return
 
     for vin, vehicle_info in vehicles.items():
         # Get basic data for device info
@@ -194,6 +227,7 @@ async def async_setup_entry(
             )
 
     async_add_entities(entities)
+    _LOGGER.debug("BMW CarData: Set up %d binary sensor entities", len(entities))
 
 
 class BMWCarDataBinarySensor(CoordinatorEntity[BMWCarDataCoordinator], BinarySensorEntity):

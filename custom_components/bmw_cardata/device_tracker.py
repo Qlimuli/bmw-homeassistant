@@ -31,8 +31,38 @@ async def async_setup_entry(
 
     entities: list[BMWCarDataDeviceTracker] = []
 
-    # Get all vehicles
+    # Get all vehicles - may be empty if rate limited on startup
     vehicles = coordinator.get_all_vehicles()
+
+    if not vehicles:
+        _LOGGER.debug(
+            "BMW CarData: No vehicles found during device tracker setup. "
+            "Trackers will be created when vehicle data becomes available."
+        )
+        # Register a listener to add entities when vehicles become available
+        async def async_add_device_trackers_when_available() -> None:
+            """Add device tracker entities when vehicle data becomes available."""
+            vehicles = coordinator.get_all_vehicles()
+            if vehicles:
+                new_entities: list[BMWCarDataDeviceTracker] = []
+                for vin, vehicle_info in vehicles.items():
+                    basic_data = coordinator.get_vehicle_data(vin).get("basic_data", {})
+                    new_entities.append(
+                        BMWCarDataDeviceTracker(
+                            coordinator=coordinator,
+                            vin=vin,
+                            vehicle_info=vehicle_info,
+                            basic_data=basic_data,
+                        )
+                    )
+                if new_entities:
+                    async_add_entities(new_entities)
+                    _LOGGER.info("BMW CarData: Added %d device tracker entities", len(new_entities))
+        
+        entry.async_on_unload(
+            coordinator.async_add_listener(async_add_device_trackers_when_available)
+        )
+        return
 
     for vin, vehicle_info in vehicles.items():
         # Get basic data for device info
@@ -48,6 +78,7 @@ async def async_setup_entry(
         )
 
     async_add_entities(entities)
+    _LOGGER.debug("BMW CarData: Set up %d device tracker entities", len(entities))
 
 
 class BMWCarDataDeviceTracker(CoordinatorEntity[BMWCarDataCoordinator], TrackerEntity):
