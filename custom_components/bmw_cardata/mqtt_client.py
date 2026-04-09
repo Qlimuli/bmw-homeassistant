@@ -44,15 +44,16 @@ class BMWMQTTClient:
 
         self._client: mqtt.Client | None = None
         self._connected = False
+        self._connecting = False
         self._reconnect_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._subscribed_vins: set[str] = set()
 
         # Circuit breaker for reconnection
         self._consecutive_failures = 0
-        self._max_failures = 5
+        self._max_failures = 10  # Increased from 5
         self._backoff_base = 5  # seconds
-        self._max_backoff = 300  # 5 minutes
+        self._max_backoff = 600  # 10 minutes (increased from 5)
 
     @property
     def is_connected(self) -> bool:
@@ -68,11 +69,20 @@ class BMWMQTTClient:
     async def async_start(self) -> None:
         """Start the MQTT client."""
         if not self._gcid or not self._id_token:
-            _LOGGER.warning("Cannot start MQTT: missing GCID or ID token")
+            _LOGGER.warning("BMW MQTT: Cannot start - missing GCID or ID token")
             return
 
         self._stop_event.clear()
+        self._consecutive_failures = 0
         await self._async_connect()
+
+    async def async_refresh_connection(self) -> None:
+        """Refresh the MQTT connection with new tokens."""
+        _LOGGER.info("BMW MQTT: Refreshing connection with new tokens")
+        await self.async_stop()
+        # Reset failure counter for fresh connection
+        self._consecutive_failures = 0
+        await self.async_start()
 
     async def async_stop(self) -> None:
         """Stop the MQTT client."""
@@ -95,6 +105,16 @@ class BMWMQTTClient:
 
     async def _async_connect(self) -> None:
         """Connect to the MQTT broker."""
+        if self._connecting:
+            _LOGGER.debug("BMW MQTT: Connection already in progress, skipping")
+            return
+            
+        if self._stop_event.is_set():
+            _LOGGER.debug("BMW MQTT: Stop event set, not connecting")
+            return
+
+        self._connecting = True
+        
         try:
             # Use custom broker or BMW's broker
             if self._custom_broker:
@@ -106,11 +126,20 @@ class BMWMQTTClient:
                 port = BMW_MQTT_PORT
                 use_tls = True
 
+            # Clean up any existing client
+            if self._client:
+                try:
+                    self._client.loop_stop()
+                    self._client.disconnect()
+                except Exception:
+                    pass
+                self._client = None
+
             # Create MQTT client with paho-mqtt 2.x API
             # BMW's streaming endpoint on port 9000 uses MQTT-over-WebSocket (WSS)
             self._client = mqtt.Client(
                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                client_id=f"bmw_cardata_{self._gcid[:8]}",
+                client_id=f"bmw_cardata_{self._gcid[:8]}_{id(self) % 10000}",
                 protocol=mqtt.MQTTv311,
                 transport="websockets",
             )
@@ -127,15 +156,22 @@ class BMWMQTTClient:
                 ssl_context = await self.hass.async_add_executor_job(
                     ssl.create_default_context
                 )
-                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3  # <-- GEÄNDERT (war TLSv1_2) → behebt WebSocket handshake error
+                # Use TLSv1_2 as minimum - some servers don't support TLSv1_3 yet
+                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
                 ssl_context.check_hostname = True
                 ssl_context.verify_mode = ssl.CERT_REQUIRED
                 self._client.tls_set_context(ssl_context)
+                
                 # BMW's broker requires the Bearer token in the HTTP Upgrade request
                 # headers (in addition to MQTT username/password credentials).
+                # Include required WebSocket headers for BMW's streaming API
                 self._client.ws_set_options(
                     path="/mqtt",
-                    headers={"Authorization": f"Bearer {self._id_token}"},
+                    headers={
+                        "Authorization": f"Bearer {self._id_token}",
+                        "Origin": "https://customer.bmwgroup.com",
+                        "User-Agent": "HomeAssistant/BMW-CarData",
+                    },
                 )
 
             # Set credentials for BMW broker
@@ -147,6 +183,8 @@ class BMWMQTTClient:
                     self._custom_broker.get("password", ""),
                 )
 
+            _LOGGER.info("BMW MQTT: Connecting to %s:%s...", host, port)
+
             # Connect in executor to avoid blocking
             await self.hass.async_add_executor_job(
                 self._client.connect, host, port, MQTT_KEEPALIVE
@@ -155,11 +193,12 @@ class BMWMQTTClient:
             # Start the loop
             self._client.loop_start()
 
-            _LOGGER.info("BMW MQTT client connecting to %s:%s", host, port)
-
         except Exception as err:
-            _LOGGER.error("Failed to connect to BMW MQTT: %s", err)
+            _LOGGER.error("BMW MQTT: Connection failed - %s", err)
+            self._connecting = False
             await self._schedule_reconnect()
+        finally:
+            self._connecting = False
 
     def _on_connect(
         self,
@@ -172,14 +211,16 @@ class BMWMQTTClient:
         """Handle MQTT connection (paho-mqtt 2.x callback signature)."""
         if not reason_code.is_failure:
             self._connected = True
+            self._connecting = False
             self._consecutive_failures = 0
-            _LOGGER.info("BMW MQTT client connected")
+            _LOGGER.info("BMW MQTT: Connected successfully")
 
             # Subscribe to vehicle topics
             self._subscribe_to_vehicles()
         else:
-            _LOGGER.error("BMW MQTT connection failed with reason: %s", reason_code)
+            _LOGGER.error("BMW MQTT: Connection rejected - reason: %s", reason_code)
             self._connected = False
+            self._connecting = False
             # Schedule reconnect
             asyncio.run_coroutine_threadsafe(
                 self._schedule_reconnect(),
@@ -195,19 +236,24 @@ class BMWMQTTClient:
         properties: mqtt.Properties | None = None,
     ) -> None:
         """Handle MQTT disconnection (paho-mqtt 2.x callback signature)."""
+        was_connected = self._connected
         self._connected = False
+        self._connecting = False
 
         if reason_code.is_failure:
             _LOGGER.warning(
-                "BMW MQTT client disconnected unexpectedly (reason=%s)", reason_code
+                "BMW MQTT: Disconnected unexpectedly (reason=%s, was_connected=%s)",
+                reason_code,
+                was_connected,
             )
-            # Schedule reconnect
-            asyncio.run_coroutine_threadsafe(
-                self._schedule_reconnect(),
-                self.hass.loop,
-            )
+            # Only schedule reconnect if we were actually connected or trying
+            if was_connected and not self._stop_event.is_set():
+                asyncio.run_coroutine_threadsafe(
+                    self._schedule_reconnect(),
+                    self.hass.loop,
+                )
         else:
-            _LOGGER.info("BMW MQTT client disconnected gracefully")
+            _LOGGER.info("BMW MQTT: Disconnected gracefully")
 
     def _on_message(
         self,
@@ -270,13 +316,20 @@ class BMWMQTTClient:
     async def _schedule_reconnect(self) -> None:
         """Schedule a reconnection with exponential backoff."""
         if self._stop_event.is_set():
+            _LOGGER.debug("BMW MQTT: Stop event set, not scheduling reconnect")
+            return
+
+        if self._connecting:
+            _LOGGER.debug("BMW MQTT: Already connecting, not scheduling reconnect")
             return
 
         self._consecutive_failures += 1
         if self._consecutive_failures > self._max_failures:
             _LOGGER.error(
-                "BMW MQTT: Too many consecutive failures (%s), stopping reconnection",
+                "BMW MQTT: Too many consecutive failures (%d/%d). "
+                "Reconnection paused. Use 'Refresh Tokens' button or restart integration to retry.",
                 self._consecutive_failures,
+                self._max_failures,
             )
             return
 
@@ -285,14 +338,20 @@ class BMWMQTTClient:
             self._max_backoff,
         )
         _LOGGER.info(
-            "BMW MQTT: Reconnecting in %s seconds (failure %s)",
+            "BMW MQTT: Reconnecting in %d seconds (attempt %d/%d)",
             backoff,
             self._consecutive_failures,
+            self._max_failures,
         )
 
         await asyncio.sleep(backoff)
         if not self._stop_event.is_set():
             await self._async_connect()
+
+    def reset_failure_counter(self) -> None:
+        """Reset the consecutive failure counter (e.g., after successful token refresh)."""
+        self._consecutive_failures = 0
+        _LOGGER.debug("BMW MQTT: Failure counter reset")
 
     def _subscribe_to_vehicles(self) -> None:
         """Subscribe to all vehicle MQTT topics."""
@@ -301,11 +360,33 @@ class BMWMQTTClient:
 
         # Coordinator provides the list of VINs (standard in this integration)
         vins = getattr(self.coordinator, "vins", []) or []
-        for vin in vins:
-            if vin not in self._subscribed_vins:
-                topic = f"{self._gcid}/{vin}"
-                self._client.subscribe(topic)
-                self._subscribed_vins.add(vin)
-                _LOGGER.debug("Subscribed to MQTT topic: %s", topic)
+        
+        if vins:
+            # Subscribe to specific VINs if known
+            for vin in vins:
+                if vin not in self._subscribed_vins:
+                    topic = f"{self._gcid}/{vin}"
+                    self._client.subscribe(topic)
+                    self._subscribed_vins.add(vin)
+                    _LOGGER.debug("BMW MQTT: Subscribed to topic: %s", topic)
+            _LOGGER.info("BMW MQTT: Subscribed to %d vehicle topics", len(self._subscribed_vins))
+        else:
+            # No VINs known yet (e.g., rate limited on startup)
+            # Subscribe to wildcard topic to receive all messages for this GCID
+            wildcard_topic = f"{self._gcid}/#"
+            self._client.subscribe(wildcard_topic)
+            _LOGGER.info(
+                "BMW MQTT: No VINs available yet, subscribed to wildcard topic: %s",
+                wildcard_topic,
+            )
 
-        _LOGGER.info("BMW MQTT: Subscribed to %s vehicle topics", len(self._subscribed_vins))
+    def subscribe_vin(self, vin: str) -> None:
+        """Subscribe to a specific VIN topic (called when VINs become available)."""
+        if not self._client or not self._connected:
+            return
+            
+        if vin not in self._subscribed_vins:
+            topic = f"{self._gcid}/{vin}"
+            self._client.subscribe(topic)
+            self._subscribed_vins.add(vin)
+            _LOGGER.debug("BMW MQTT: Subscribed to new VIN topic: %s", topic)

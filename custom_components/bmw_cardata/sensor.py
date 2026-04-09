@@ -296,8 +296,44 @@ async def async_setup_entry(
 
     entities: list[BMWCarDataSensor] = []
 
-    # Wait for initial data
+    # Get vehicles - may be empty if rate limited on startup
     vehicles = coordinator.get_all_vehicles()
+
+    if not vehicles:
+        _LOGGER.warning(
+            "BMW CarData: No vehicles found during sensor setup. "
+            "Sensors will be created when vehicle data becomes available."
+        )
+        # Register a listener to add entities when vehicles become available
+        async def async_add_sensors_when_available() -> None:
+            """Add sensor entities when vehicle data becomes available."""
+            vehicles = coordinator.get_all_vehicles()
+            if vehicles:
+                new_entities: list[BMWCarDataSensor] = []
+                for vin, vehicle_info in vehicles.items():
+                    basic_data = coordinator.get_vehicle_data(vin).get("basic_data", {})
+                    for descriptor, description in SENSOR_DESCRIPTIONS.items():
+                        if descriptor in BINARY_DESCRIPTORS or descriptor in LOCATION_DESCRIPTORS:
+                            continue
+                        new_entities.append(
+                            BMWCarDataSensor(
+                                coordinator=coordinator,
+                                vin=vin,
+                                vehicle_info=vehicle_info,
+                                basic_data=basic_data,
+                                descriptor=descriptor,
+                                description=description,
+                            )
+                        )
+                if new_entities:
+                    async_add_entities(new_entities)
+                    _LOGGER.info("BMW CarData: Added %d sensor entities", len(new_entities))
+        
+        # Schedule check after first successful update
+        entry.async_on_unload(
+            coordinator.async_add_listener(async_add_sensors_when_available)
+        )
+        return
 
     for vin, vehicle_info in vehicles.items():
         # Get basic data for device info
@@ -321,6 +357,7 @@ async def async_setup_entry(
             )
 
     async_add_entities(entities)
+    _LOGGER.debug("BMW CarData: Set up %d sensor entities", len(entities))
 
 
 class BMWCarDataSensor(CoordinatorEntity[BMWCarDataCoordinator], SensorEntity):

@@ -33,13 +33,17 @@ MQTT_KEEPALIVE: Final = 60
 POLL_INTERVAL: Final = 1800  # 30 minutes fallback polling
 
 # API Rate Limit
+# BMW CarData API has a daily limit of ~50 requests
 API_RATE_LIMIT_DAILY: Final = 50
+# After hitting the limit, wait 24 hours before retrying
 API_RATE_LIMIT_RESET_HOURS: Final = 24
 
 # Platforms
 PLATFORMS: Final = ["sensor", "binary_sensor", "device_tracker", "button"]
 
-# Debug
+# Debug Mode
+# Set to True to enable verbose logging for troubleshooting
+# WARNING: This will log sensitive data like tokens - only enable for debugging
 DEBUG_LOG: Final = False
 
 # Sensor Categories

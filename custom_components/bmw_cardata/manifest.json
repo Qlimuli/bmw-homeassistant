@@ -1,14 +1,14 @@
 {
   "domain": "bmw_cardata",
   "name": "BMW CarData",
-  "codeowners": ["@your-github-username"],
+  "codeowners": ["@Qlimuli"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/your-username/bmw-cardata-hacs",
+  "documentation": "https://github.com/Qlimuli/bmw-homeassistant",
   "integration_type": "hub",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/your-username/bmw-cardata-hacs/issues",
-  "loggers": ["bmw_cardata"],
+  "issue_tracker": "https://github.com/Qlimuli/bmw-homeassistant/issues",
+  "loggers": ["bmw_cardata", "paho.mqtt"],
   "requirements": ["paho-mqtt>=2.0.0,<3.0.0"],
-  "version": "2026.4.0"
+  "version": "2026.4.1"
 }
